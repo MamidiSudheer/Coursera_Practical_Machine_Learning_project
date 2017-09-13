@@ -1,0 +1,151 @@
+---
+title: "PML_project"
+author: "Yu-Fen (Andrea) Wang"
+date: "September 11, 2017"
+output: 
+  html_document: 
+    number_sections: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Import data and library
+
+```{r}
+library(caret);library(ggplot2);library(lattice);
+library(e1071)
+training<-read.csv("pml-training.csv",header = TRUE,stringsAsFactors = TRUE,na.strings = "NA")
+final_test_set<-read.csv("pml-testing.csv",header=TRUE,stringsAsFactors = TRUE,na.strings = "NA")
+dim(training)
+dim(final_test_set)
+```
+
+## Data cleaning
+
+```{r}
+library(dplyr)
+
+### check how many NAs witihn the dataset  
+summary(is.na(training))
+summary(is.na(final_test_set))
+
+### exclude those variables with NA in trainig set and final test set
+training <- training[, colSums(is.na(training)) == 0]
+final_test_set<-final_test_set[,colSums(is.na(final_test_set)) == 0]
+
+### remove variables that are not involved in movement record
+training_set<-training[,-c(1:7)]
+final_test_set<-final_test_set[,-c(1:7)]
+
+### check the dimention and type of each variable for both sets
+dim(training_set)
+dim(final_test_set)
+sapply(training_set,class)
+sapply(final_test_set,class)
+
+### select numberic variables for model building
+class<-training_set$classe
+training_set<-training_set[ ,sapply(training_set,class)=='numeric']
+final_test_set<-final_test_set[,sapply(final_test_set,class)=='numeric']
+training_set<-training_set[,colnames(final_test_set)]
+training_set<-mutate(training_set,classe=class)
+
+### check the dimention of both set after subsetting 
+dim(training_set)
+dim(final_test_set)
+
+### now the dimention are reduced from 160 to <30 after removing the NAs and non-numeric variables (to reduce the demand for computing power)
+```
+
+## Spliting data for training and testing within training set 
+```{r}
+set.seed(13737)
+
+### First, create data partition 
+inTrain<-createDataPartition(training_set$classe,p=0.7,list = FALSE)
+
+### Assign training and test set for model buidling
+train_set<-training_set[inTrain,]
+test_set<-training_set[-inTrain,]
+
+### Next, I will try 3 different approaches and pick the best model to run prediction on pml-testing data
+```
+
+## set up parallel processing 
+
+```{r}
+## set up the parallel processing as suggested in the course forum to speed up model development
+library(snow)
+library(parallel)
+c1<-makeCluster(detectCores()-1)
+```
+
+
+## prediction algorithms-Decision Tree
+```{r}
+### First, try decision tree method
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(rattle)
+model_dt<-train(classe ~ .,data=train_set,method="rpart")
+fancyRpartPlot(model_dt$finalModel)
+predict_dt<-predict(model_dt,test_set)
+confusion_mx_df<-confusionMatrix(predict_dt,test_set$classe)
+###Accuracy of decision tree model is
+confusion_mx_df$overall[1]
+### As the accuracy is not good, we will try another approach
+```
+
+## prediction algorithm-gbm
+```{r}
+### Second, try gbm method
+library(gbm)
+set.seed(123456)
+fitControl<-trainControl(method = "cv",number = 5,allowParallel = TRUE)
+model_gbm<-train(classe ~ .,data=train_set,method="gbm",trControl=fitControl)
+predict_gbm<-predict(model_gbm,test_set)
+confusion_mx_gbm<-confusionMatrix(test_set$classe,predict_gbm)
+###The accuracy of gbm model is
+confusion_mx_gbm$overall[1]
+### The accuracy is around 95%, it is much better than the decision tree method.
+
+```
+
+## prediction algorithm-random forest 
+```{r}
+### last, try the random forest method
+library(randomForest)
+set.seed(123456)
+fitControl<-trainControl(method = "cv",number = 5,allowParallel = TRUE)
+model_rf<-train(classe ~., data=train_set,method="rf",trControl=fitControl)
+predict_rf<-predict(model_rf,test_set)
+confusionMatrix_rf<-confusionMatrix(test_set$classe,predict_rf)
+confusionMatrix_rf
+### The accuracy of random forest model is
+confusionMatrix_rf$overall[1]
+
+### The accuracy of this model reached >99% so we will use this model for the next step 
+
+### Estimate the out of sample error
+
+Out_error<-as.numeric(1-confusionMatrix_rf$overall[1])
+Out_error
+
+### prediction on the 20 test cases
+
+prediction<-predict(model_rf,final_test_set)
+prediction
+
+### stop parallel processing
+stopCluster(c1)
+```
+## Data source:
+http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+
+## This completes my PML course project
